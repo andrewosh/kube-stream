@@ -86,8 +86,6 @@ KubeClient.prototype._processResponse = function (opts, rsp) {
         // kind might not consistently appear in the results
         toMatch = _.omit(toMatch, 'kind')
         var tempNoKind = _.omit(opts.template, 'kind')
-        console.log('toMatch: ' + JSON.stringify(toMatch))
-        console.log('tempNoKind: ' + JSON.stringify(tempNoKind))
         if (_.isMatch(toMatch, tempNoKind)) { 
           return cb(null, data)
         }
@@ -121,7 +119,6 @@ KubeClient.prototype.get = function (opts, cb) {
     fullUrl = urljoin(this.baseUrl, this.name)
   }
   fullUrl = this._query(fullUrl, opts)
-  console.log('fullUrl: ' + fullUrl)
   var rsp = request(_.merge({ url: fullUrl }, this._requestOpts()))
   var processed = this._processResponse(opts, rsp)
   processed.on('error', function (err) {
@@ -203,30 +200,54 @@ KubeClient.prototype.create = function (opts, cb) {
  * Calls cb with an error if the resource does not exist (or fails to be deleted), or with 
  * the deleted resource if the operation succeeds
  *
- * @param {object} template - the resource template to delete on the cluster
+ * @param {object} opts - object containing the template to delete and options
  * @param {function} cb - callback(err, resource)
  */
-KubeClient.prototype.delete = function (template, cb) {
+KubeClient.prototype.delete = function (opts, cb) {
   var self = this
-  var namespace = _.get(template, 'metadata.namespace')
-  if (!template || !namespace) {
-    throw new Error('template must exist and contain a namespace')
+  var template = opts.template || {}
+  var name = opts.name || _.get(template, 'metadata.name')
+  if (!name) {
+    return cb(new Error('must specify the name of the resource to delete'))
   }
 
   var checkIfNotExists = function (next) {
+    if (template === {}) {
+      template = {
+        metadata: {
+          name: name
+        }
+      }
+    }
+    if (opts.force) {
+      return next(null)
+    }
     self.get({ template: template }, function (err, items) {
       if (err) return next(err)
-      if (!items) return next(new Error('resource does not exist -- cannot delete'))
+      if (!(items.length > 0)) return next(new Error('resource does not exist -- cannot delete'))
       return next(null)
     })
   }
 
   var deleteResource = function (next) {
-    var fullUrl = urljoin(this.baseUrl, 'namespaces', namespace, self.name)
+    var nsUrl = urljoin(self.baseUrl, 'namespaces')
+    if (!name) {
+      return next(new Error('must specify a name in the resource template'))
+    }
+
+    var namespace = null
+    var fullUrl = null
+    if (self.name !== 'namespaces') {
+      namespace = opts.namespace || _.get(template, 'metadata.namespace') 
+      fullUrl = urljoin(self.baseUrl, 'namespaces', namespace, self.name, name)
+    } else  {
+      fullUrl = urljoin(self.baseUrl, 'namespaces', name)
+    }
+
+    console.log('fullUrl: ' + fullUrl)
     var reqParams = _.merge({
       url: fullUrl,
       method: 'DELETE',
-      body: JSON.stringify(template)
     }, self._requestOpts())
     var processed = self._processResponse({}, request(reqParams))
     processed.on('error', function (err) {

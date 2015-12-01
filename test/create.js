@@ -101,28 +101,67 @@ describe('KubeClient#get()', function () {
     })
   })
 
+  it('should get pods with a given label')
+
 })
 
 describe('KubeClient#delete()', function () {
 
-  it('should delete services in a namespace')
+  it('should delete services in a namespace', function (done) {
+    var client = new KubeClient({ name: 'services' })
+    client.delete({
+      template: util.makeService(namespace, 'service-1', 'pod-1')
+    }, function (err, service) {
+      if (err) throw err
+      done()
+    })
+  })
 
-  it('should delete pods in a namespace')
+  it('should delete pods in a namespace', function (done) {
+    var client = new KubeClient({ name: 'pods' })
+    client.delete({
+      template: util.makePod(namespace, 'pod-1')
+    }, function (err, pod) {
+      if (err) throw err
+      done()
+    })
+  })
 
-  it('should delete a namespace')
+  it('should result in an empty namespace after both deletions', function (done) {
+    var client = new KubeClient({ name: 'pods' })
+    var pod = util.makePod(namespace, 'pod-1') 
+    client.get({
+      template: pod
+    }, function (err, pods) {
+      if (err) throw err
+      assert.equal(pods.length, 0)
+      var client2 = new KubeClient({ name: 'services'})
+      var service = util.makeService(namespace, 'service-1', 'pod-1')
+      client2.get({
+        template: service
+      }, function (err, services) {
+        if (err) throw err
+        assert.equal(services.length, 0)
+        done()
+      })
+    })
+  })
+
+  it('should delete a namespace', function (done) {
+    var client = new KubeClient({ name: 'namespaces' })
+    var ns = util.makeNamespace(namespace)
+    client.delete({
+      template: ns
+    }, function (err, ns) {
+      if (err) throw err
+      done()
+    })
+  })
 
 })
 
 describe('KubeClient#watch()', function () {
 
-  it('should watch for updates as they are generated', function (done) {
-    this.timeout(2000)
-    var client = new KubeClient({ name: 'pods' })
-    client.watch().pipe(es.through(function write(data) {
-      // Make sure creation/deletion is detected here, then done()
-      // console.log('data: ' + data)
-    }, function end() {
-      done()
-    }))
-  })
+  it('should watch for updates as they are generated')
+
 })
