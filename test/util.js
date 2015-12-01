@@ -12,7 +12,7 @@ var baseUrl = '{0}://{1}:{2}/api/{3}'.format(protocol, host, port, version)
 
 var makePod = function (num) {
   return {
-    type: 'Pod',
+    kind: 'Pod',
     apiVersion: 'v1',
     metadata: {
       name: 'pod' + num,
@@ -24,7 +24,7 @@ var makePod = function (num) {
     spec: {
       containers: [
         {
-          name: 'demo_container',
+          name: 'demo-container',
           image: 'ubuntu:latest'
         }
       ]

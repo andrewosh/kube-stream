@@ -1,13 +1,14 @@
 var _ = require('lodash')
 var request = require('request')
 var es = require('event-stream')
-var Bacon = require('bacon')
+var concat = require('concat-stream')
 var urljoin = require('url-join')
 var JSONStream = require('JSONStream')
 var format = require('string-format')
 format.extend(String.prototype)
 
 var util = require('./lib/util.js')
+var settings = require('./config/main.js')
 
 /**
  * Manages all communication with a Kubernetes resource endpoint (i.e. 'pods')
@@ -15,7 +16,13 @@ var util = require('./lib/util.js')
  */
 module.exports = KubeStream = function (opts) {
   opts = opts || {}
-  this.baseUrl = opts.baseUrl || util.baseUrl || 'http://localhost/api/v1'
+  var protocol = settings.protocol,
+    kubeHost = settings.kubeHost,
+    kubePort = settings.kubePort,
+    kubeVersion = settings.kubeVersion
+  var defaultUrl = '{0}://{1}:{2}/api/{3}/'.format(protocol, kubeHost, kubePort, kubeVersion)
+
+  this.baseUrl = opts.baseUrl || defaultUrl || 'http://localhost/api/v1'
   this.name = opts.name 
 
   this.token = util.kubeAuthToken() 
@@ -62,13 +69,23 @@ KubeStream.prototype._processResponse = function (opts, rsp) {
     .pipe(JSONStream.parse())
     .pipe(es.through(function write(data) {
       var thr = this
-      _.forEach(_.get(data, 'items'), function (item) {
-        thr.emit('data', item)
-      })
+      var items = _.get(data, 'items')
+      if (items) { 
+        _.forEach(_.get(data, 'items'), function (item) {
+          thr.emit('data', item)
+        })
+      } else {
+        thr.emit('data', data)
+      }
     }))
     .pipe(es.map(function (data, cb) {
       if (opts.template) {
-        if (_.isMatch(data, opts.template)) { 
+        var toMatch = data['type'] ? data['object'] : data
+        // kind might not consistently appear in the results
+        toMatch = _.omit(toMatch, 'kind')
+        var tempNoKind = _.omit(opts.template, 'kind')
+        if (_.isMatch(toMatch, tempNoKind)) { 
+          console.log('MATCHED!')
           return cb(null, data)
         }
         return cb()
@@ -88,42 +105,66 @@ KubeStream.prototype.get = function (opts, cb) {
   if (!cb) {
     return processed
   } else {
-    processed.on('data', function (data) {
-      return cb(null, data)
-    })
     processed.on('error', function (err) {
       return cb(err)
     })
+    var handleItems = function (items) { 
+      console.log('in handleItems: ' + items)
+      return cb(null, items)
+    }
+    var concatStream = concat(handleItems)
+    processed.pipe(concatStream)
   }
 }
 
-KubeStream.prototype.create = function (template, cb) {
-  var templateStream = this.watch({
+/**
+ * Creates a resource according to the template
+ *
+ * Returns a watch stream for the given template
+ *
+ * @param {object} template - the resource template to create on the cluster
+ */
+KubeStream.prototype.create = function (template) {
+  var namespace = _.get(template, 'metadata.namespace')
+  if (!template || !namespace) {
+    throw new Error('template must exist and contain a namespace')
+  }
+  var getStream = this.get({
     template: template
   })
-  var fullUrl = urljoin(this.baseUrl, this.name)
-  var reqParams = _.merge({
-    url: fullUrl,
-    method: 'POST',
-    body: JSON.stringify(template)
-  }, this._requestOpts())
+  getStream.pipe(es.through(function write(data) {
+    if (data) {
+      this.emit('error', new Error('pod matching template already exists'))
+    }
+  }, function end() {
+    var fullUrl = urljoin(this.baseUrl, 'namespaces', namespace, this.name)
+    var reqParams = _.merge({
+      url: fullUrl,
+      method: 'POST',
+      body: JSON.stringify(template)
+    }, this._requestOpts())
+  })
   var merged = es.merge(
     templateStream,
-    request(reqParams)).pipe(es.map(function (data, callback) {
-      console.log('data: ' + data)
+    request(reqParams).pipe(es.through(function write(data) {
       if (_.isError(data)) {
-        return callback(null, data)
-      }
-      return callback()
-    }))
+        return this.emit('error', data)
+      }}, function end() { 
+        return this.emit('data', 'finished')
+      }))
+  )
   if (!cb) {
     return merged
   }
   merged.on('error', function (err) {
+    merged.destroy()
     return cb(err)
   })
   merged.on('data', function (data) {
-    return cb(null, data)
+    if (data === 'finished') { 
+      merged.destroy()
+      return cb(null)
+    }
   })
 }
 
@@ -158,10 +199,11 @@ KubeStream.prototype.update = function (template, opts, cb) {
 }
 
 KubeStream.prototype.watch = function (opts, cb) {
+  opts = opts || {}
   var self = this
-  var fullUrl = this._query(urljoin(this.baseUrl, this.name), opts)
-  var watchUrl = urljoin(this.baseUrl, 'watch', this.name)
-  return this._processResponse(opts, request.get(watchUrl))
+  var fullUrl = this._query(urljoin(this.baseUrl, 'watch', this.name), opts)
+  console.log('fullUrl: ' + fullUrl)
+  return this._processResponse(opts, request.get(fullUrl))
 }
 
 /**
