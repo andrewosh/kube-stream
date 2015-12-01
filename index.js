@@ -1,4 +1,5 @@
 var _ = require('lodash')
+var async = require('async')
 var request = require('request')
 var es = require('event-stream')
 var concat = require('concat-stream')
@@ -14,7 +15,7 @@ var settings = require('./config/main.js')
  * Manages all communication with a Kubernetes resource endpoint (i.e. 'pods')
  * @constructor
  */
-module.exports = KubeStream = function (opts) {
+module.exports = KubeClient = function (opts) {
   opts = opts || {}
   var protocol = settings.protocol,
     kubeHost = settings.kubeHost,
@@ -31,7 +32,7 @@ module.exports = KubeStream = function (opts) {
   }
 }
 
-KubeStream.prototype._query = function (url, opts) {
+KubeClient.prototype._query = function (url, opts) {
   opts = opts || {}
   var query = null
   if (opts.labels) {
@@ -46,7 +47,7 @@ KubeStream.prototype._query = function (url, opts) {
   return url
 }
 
-KubeStream.prototype._requestOpts = function () {
+KubeClient.prototype._requestOpts = function () {
   return {
     headers: {
       'Authorization': 'Bearer {0}'.format(this.token)
@@ -54,16 +55,17 @@ KubeStream.prototype._requestOpts = function () {
   }
 }
 
-KubeStream.prototype._extract = function (items, view) {
+KubeClient.prototype._extract = function (items, view) {
   if (!view) {
     return items
   } 
   return _.pluck(items, view)
 }
 
-KubeStream.prototype._processResponse = function (opts, rsp) {
+KubeClient.prototype._processResponse = function (opts, rsp) {
   opts = opts || {}
   var self = this
+  // TODO use pump here
   return rsp
     .pipe(es.split())
     .pipe(JSONStream.parse())
@@ -85,7 +87,6 @@ KubeStream.prototype._processResponse = function (opts, rsp) {
         toMatch = _.omit(toMatch, 'kind')
         var tempNoKind = _.omit(opts.template, 'kind')
         if (_.isMatch(toMatch, tempNoKind)) { 
-          console.log('MATCHED!')
           return cb(null, data)
         }
         return cb()
@@ -102,124 +103,148 @@ KubeStream.prototype.get = function (opts, cb) {
   var fullUrl = this._query(urljoin(this.baseUrl, this.name), opts)
   var rsp = request(_.merge({ url: fullUrl }, this._requestOpts()))
   var processed = this._processResponse(opts, rsp)
-  if (!cb) {
-    return processed
-  } else {
-    processed.on('error', function (err) {
-      return cb(err)
-    })
-    var handleItems = function (items) { 
-      console.log('in handleItems: ' + items)
-      return cb(null, items)
-    }
-    var concatStream = concat(handleItems)
-    processed.pipe(concatStream)
+  processed.on('error', function (err) {
+    return cb(err)
+  })
+  var handleItems = function (items) { 
+    return cb(null, items)
   }
+  var concatStream = concat(handleItems)
+  processed.pipe(concatStream)
 }
 
 /**
  * Creates a resource according to the template
  *
- * Returns a watch stream for the given template
+ * Calls cb with an error if the resource already exists (or fails to be created), or with 
+ * the created resource if the operation succeeds
  *
  * @param {object} template - the resource template to create on the cluster
+ * @param {function} cb - callback(err, resource)
  */
-KubeStream.prototype.create = function (template) {
+KubeStream.prototype.create = function (template, cb) {
+  var self = this
   var namespace = _.get(template, 'metadata.namespace')
   if (!template || !namespace) {
     throw new Error('template must exist and contain a namespace')
   }
-  var getStream = this.get({
-    template: template
-  })
-  getStream.pipe(es.through(function write(data) {
-    if (data) {
-      this.emit('error', new Error('pod matching template already exists'))
-    }
-  }, function end() {
-    var fullUrl = urljoin(this.baseUrl, 'namespaces', namespace, this.name)
+
+  var checkIfExists = function (next) {
+    self.get({ template: template }, function (err, items) {
+      if (err) return next(err)
+      if (items) return next(new Error('resource already exists -- cannot create'))
+      return next(null)
+    })
+  }
+
+  var createResource = function (next) {
+    var fullUrl = urljoin(self.baseUrl, 'namespaces', namespace, self.name)
     var reqParams = _.merge({
       url: fullUrl,
       method: 'POST',
       body: JSON.stringify(template)
-    }, this._requestOpts())
-  })
-  var merged = es.merge(
-    templateStream,
-    request(reqParams).pipe(es.through(function write(data) {
-      if (_.isError(data)) {
-        return this.emit('error', data)
-      }}, function end() { 
-        return this.emit('data', 'finished')
-      }))
-  )
-  if (!cb) {
-    return merged
+    }, self._requestOpts())
+    var processed = self._processResponse({}, request(reqParams))
+    processed.on('error', function (err) {
+      return next(err)
+    })
+    processed.on('data', function (data) {
+      return next(null, data) 
+    })
   }
-  merged.on('error', function (err) {
-    merged.destroy()
-    return cb(err)
-  })
-  merged.on('data', function (data) {
-    if (data === 'finished') { 
-      merged.destroy()
-      return cb(null)
-    }
+
+  async.series([
+    checkIfExists,
+    createResource
+  ], function (err, resource) {
+    if (err) return cb(err) 
+    return cb(null, resource)
   })
 }
 
-
+/**
+ * Deletes a resource according to the template
+ *
+ * Calls cb with an error if the resource does not exist (or fails to be deleted), or with 
+ * the deleted resource if the operation succeeds
+ *
+ * @param {object} template - the resource template to delete on the cluster
+ * @param {function} cb - callback(err, resource)
+ */
 KubeStream.prototype.delete = function (template, cb) {
   var self = this
-  var opts = {
-    template: template
+  var namespace = _.get(template, 'metadata.namespace')
+  if (!template || !namespace) {
+    throw new Error('template must exist and contain a namespace')
   }
-  var stream = this.get(opts)
-    .on('error', function (err) {
-      return cb(err)
+
+  var checkIfNotExists = function (next) {
+    self.get({ template: template }, function (err, items) {
+      if (err) return next(err)
+      if (!items) return next(new Error('resource does not exist -- cannot delete'))
+      return next(null)
     })
-    .on('data', function (items) {
-      if (!items) {
-        var err = new Error('no resources matching template found to delete')
-        this.emit(err)
-        if (cb) {
-          return cb(err)
-        }
-      }
+  }
+
+  var deleteResource = function (next) {
+    var fullUrl = urljoin(this.baseUrl, 'namespaces', namespace, self.name)
+    var reqParams = _.merge({
+      url: fullUrl,
+      method: 'DELETE',
+      body: JSON.stringify(template)
+    }, self._requestOpts())
+    var processed = self._processResponse({}, request(reqParams))
+    processed.on('error', function (err) {
+      return next(err)
     })
-    .pipe(es.map(function (data, next) {
-      var url = self.baseUrl
-      request(_.merge({
-        url: url 
-      }, this._requestOpts()))
-    }))
+    processed.on('data', function (data) {
+      return next(null, data) 
+    })
+  }
+
+  async.series([
+    checkIfNotExists,
+    deleteResource
+  ], function (err, resource) {
+    if (err) return cb(err) 
+    return cb(null, resource)
+  })
 }
 
-KubeStream.prototype.update = function (template, opts, cb) {
+/**
+ * Updates a resource on the cluster by applying a delta to an existing resource
+ *
+ * @param {object} old - the old template that will be updated
+ * @param {object} delta - the update to apply to old
+ * @param {function} cb - callback(err, resource)
+ */
+KubeStream.prototype.update = function (old, delta, cb) {
+  var self = this
+  var newResource = _.assign({}, old, delta)
+  var deleteResource = function (next) {
+    self.delete(old, function (err, res) {
+      if (err) return next(err)
+      return next(null)
+    })
+  }
+  var createResource = function (next) {
+    self.create(newResource, function (err, res) {
+      if (err) return next(err)
+      return next(null, res)
+    })
+  }
+  async.series([
+    deleteOld,
+    createNew
+  ], function (err, res) {
+    if (err) return cb(err)
+    return cb(null, res)
+  })
 }
 
 KubeStream.prototype.watch = function (opts, cb) {
   opts = opts || {}
   var self = this
   var fullUrl = this._query(urljoin(this.baseUrl, 'watch', this.name), opts)
-  console.log('fullUrl: ' + fullUrl)
   return this._processResponse(opts, request.get(fullUrl))
 }
-
-/**
- * Wraps a set of KubeStreams and emits all Kubernetes events
- * @constructor
-function KubeStream(opts) {
-    this.opts = opts || {}
-    this.host = opts.host || settings.kube.proxyHost + ':' + settings.kube.proxyPort
-    this.protocol = opts.protocol || settings.kube.protocol || 'http'
-    this.version = opts.version || settings.kube.apiVersion || 'v1'
-
-    var baseUrl = this.protocol + '://' + this.host + '/api/' + this.version + '/'
-    var resources = ['pods', 'services', 'events', 'hosts', 'services', 'replicationControllers']
-    _.forEach(resources, function (name) {
-        this[name] = new KubeStream(baseUrl, name)
-    })
-}
-**/
-
