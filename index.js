@@ -65,7 +65,7 @@ KubeClient.prototype._extract = function (items, view) {
 KubeClient.prototype._processResponse = function (opts, rsp) {
   opts = opts || {}
   var self = this
-  // TODO use pump here
+  // TODO use pump here?
   return rsp
     .pipe(es.split())
     .pipe(JSONStream.parse())
@@ -86,6 +86,8 @@ KubeClient.prototype._processResponse = function (opts, rsp) {
         // kind might not consistently appear in the results
         toMatch = _.omit(toMatch, 'kind')
         var tempNoKind = _.omit(opts.template, 'kind')
+        console.log('toMatch: ' + JSON.stringify(toMatch))
+        console.log('tempNoKind: ' + JSON.stringify(tempNoKind))
         if (_.isMatch(toMatch, tempNoKind)) { 
           return cb(null, data)
         }
@@ -96,11 +98,30 @@ KubeClient.prototype._processResponse = function (opts, rsp) {
     .pipe(es.map(function (data, cb) {
       cb(null, self._extract(data, opts.view))
     }))
+    .pipe(es.through(function write(data) {
+      if (data && data['kind'] === 'Status' && data['status'] === 'Failure') {
+        this.emit('error', data)
+      } else {
+        this.emit('data', data)
+      }
+    }))
 }
 
-KubeStream.prototype.get = function (opts, cb) {
+KubeClient.prototype.get = function (opts, cb) {
   opts = opts || {}
-  var fullUrl = this._query(urljoin(this.baseUrl, this.name), opts)
+  if (typeof opts === 'function') {
+    cb = opts
+    opts = {}
+  }
+  var fullUrl = null
+  if (opts.template && opts.template.metadata.namespace) {
+    var namespace = opts.template.metadata.namespace
+    fullUrl = urljoin(this.baseUrl, 'namespaces', namespace, this.name)
+  } else {
+    fullUrl = urljoin(this.baseUrl, this.name)
+  }
+  fullUrl = this._query(fullUrl, opts)
+  console.log('fullUrl: ' + fullUrl)
   var rsp = request(_.merge({ url: fullUrl }, this._requestOpts()))
   var processed = this._processResponse(opts, rsp)
   processed.on('error', function (err) {
@@ -109,7 +130,7 @@ KubeStream.prototype.get = function (opts, cb) {
   var handleItems = function (items) { 
     return cb(null, items)
   }
-  var concatStream = concat(handleItems)
+  var concatStream = concat({ encoding: 'object' }, handleItems)
   processed.pipe(concatStream)
 }
 
@@ -119,26 +140,38 @@ KubeStream.prototype.get = function (opts, cb) {
  * Calls cb with an error if the resource already exists (or fails to be created), or with 
  * the created resource if the operation succeeds
  *
- * @param {object} template - the resource template to create on the cluster
+ * @param {object} opts - object containing the template to create on the cluster and options
  * @param {function} cb - callback(err, resource)
  */
-KubeStream.prototype.create = function (template, cb) {
+KubeClient.prototype.create = function (opts, cb) {
   var self = this
-  var namespace = _.get(template, 'metadata.namespace')
-  if (!template || !namespace) {
-    throw new Error('template must exist and contain a namespace')
+  var template = opts.template
+  var kind = template.kind
+  if (!template || !kind) {
+    return cb(new Error('template must exist and must contain a Kind property'))
   }
 
   var checkIfExists = function (next) {
+    if (opts.force) {
+      return next(null)
+    }
     self.get({ template: template }, function (err, items) {
       if (err) return next(err)
-      if (items) return next(new Error('resource already exists -- cannot create'))
+      if (items.length > 0) return next(new Error('resource already exists -- cannot create'))
       return next(null)
     })
   }
 
   var createResource = function (next) {
-    var fullUrl = urljoin(self.baseUrl, 'namespaces', namespace, self.name)
+    var nsUrl = urljoin(self.baseUrl, 'namespaces')
+    var fullUrl = nsUrl
+    if (kind !== 'Namespace') {
+      var namespace = _.get(template, 'metadata.namespace')
+      if (!namespace) {
+        return next(new Error('must specify a namespace in the resource template'))
+      }
+      fullUrl = urljoin(self.baseUrl, 'namespaces', namespace, self.name)
+    }
     var reqParams = _.merge({
       url: fullUrl,
       method: 'POST',
@@ -146,9 +179,11 @@ KubeStream.prototype.create = function (template, cb) {
     }, self._requestOpts())
     var processed = self._processResponse({}, request(reqParams))
     processed.on('error', function (err) {
+      console.log('err: ' + err)
       return next(err)
     })
     processed.on('data', function (data) {
+      console.log('data: ' + JSON.stringify(data)) 
       return next(null, data) 
     })
   }
@@ -171,7 +206,7 @@ KubeStream.prototype.create = function (template, cb) {
  * @param {object} template - the resource template to delete on the cluster
  * @param {function} cb - callback(err, resource)
  */
-KubeStream.prototype.delete = function (template, cb) {
+KubeClient.prototype.delete = function (template, cb) {
   var self = this
   var namespace = _.get(template, 'metadata.namespace')
   if (!template || !namespace) {
@@ -218,7 +253,7 @@ KubeStream.prototype.delete = function (template, cb) {
  * @param {object} delta - the update to apply to old
  * @param {function} cb - callback(err, resource)
  */
-KubeStream.prototype.update = function (old, delta, cb) {
+KubeClient.prototype.update = function (old, delta, cb) {
   var self = this
   var newResource = _.assign({}, old, delta)
   var deleteResource = function (next) {
@@ -242,7 +277,12 @@ KubeStream.prototype.update = function (old, delta, cb) {
   })
 }
 
-KubeStream.prototype.watch = function (opts, cb) {
+/**
+ * Return a watch stream that's subscribed to this resource
+ *
+ * @param {object} opts - optional filters or labels
+ */
+KubeClient.prototype.watch = function (opts) {
   opts = opts || {}
   var self = this
   var fullUrl = this._query(urljoin(this.baseUrl, 'watch', this.name), opts)

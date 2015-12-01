@@ -1,62 +1,124 @@
+var _ = require('lodash')
 var es = require('event-stream') 
 var assert = require('assert')
 
-var KubeStream = require('../index.js')
+var KubeClient = require('../index.js')
 var util = require('./util.js')
 var settings = require('../config/main.js')
 
-describe('KubeStream#create()', function () {
+var namespace = 'test'
 
-  it('should create resources and call the callback with the resource ID', function (done) {
-    this.timeout(20000)
-    var stream = new KubeStream({ name: 'pods'})
-    var template = util.makePod(1)
-    stream.create(util.makePod(1), function (err) {
-      var getStream = stream.get({ template: template })
-      getStream.on('error', function (err) {
-        assert.fail(err)
-      })
-      getStream.pipe(es.through(function write(pod) {
-        console.log(pod)
-        assert.notEqual(pod, null)
-        assert.equal(_.get(pod, 'metadata.name'), template.metadata.name)
-        var status = _.get(pod, 'status.phase')
-        assert((status === 'Running') || (status === 'Pending'))
-      }, function end() {
-        done()
-      }))
-    })
-  })
+describe('KubeClient#create()', function () {
 
-  it('should create resources and return a stream containing the resource ID', function (done) {
-  })
-
-  it('should return a (properly formed) stream if no callback is specified')
-
-  it('should call the callback (and close the stream) if the callback is specified')
-})
-
-describe('KubeStream#get()', function () {
-  it('should get all pods currently on the cluster', function (done) {
-    var stream = new KubeStream({ name: 'pods'})
-    stream.get().pipe(es.through(function write(data) {
-      assert(typeof data === 'object')     
-      // simple checks to ensure these are likely properly formed
-      assert(data.metadata)
-      assert(data.status.phase)
-    }, function end() {
+  it('should correctly create namespaces', function (done) {
+    var client = new KubeClient({ name: 'namespaces'})
+    var testNamespace = util.makeNamespace(namespace)
+    client.create({
+      template: testNamespace
+    }, function (err, namespace) {
+      if (err) throw err
       done()
-    })).on('error', function (err) {
-      assert.fail(err)
+    })
+  })
+
+  it('should not try to create resources twice', function (done) {
+    var client = new KubeClient({ name: 'namespaces'})
+    var testNamespace = util.makeNamespace(namespace)
+    client.create({
+      template: testNamespace
+    }, function (err, namespace) {
+      assert.notEqual(err, null)
+      done()
+    })
+  })
+
+  it('should create pods and call the callback with the created resource', function (done) {
+    var client = new KubeClient({ name: 'pods'})
+    var template = util.makePod(namespace, 'pod-1')
+    client.create({ 
+      template: template
+    }, function (err, pod) {
+      if (err) throw err
+      console.log('pod: ' + pod)
+      done()
+    })
+  })
+
+  it('should create services and call the callback with the created resource', function (done) {
+    var client = new KubeClient({ name: 'services'})
+    var template = util.makeService(namespace, 'service-1', 'pod-1')
+    client.create({ 
+      template: template
+    }, function (err, service) {
+      if (err) throw err
+      console.log('service: ' + service)
+      done()
     })
   })
 })
 
-describe('KubeStream#watch()', function () {
+describe('KubeClient#get()', function () {
+
+  it('should get all pods currently on the cluster', function (done) {
+    var client = new KubeClient({ name: 'pods'})
+    client.get(function (err, pods) {
+      assert.equal(err, null)
+      _.map(pods, function (pod) {
+        // simple check of the result structure
+        assert.notEqual(pod.metadata, null)
+      })
+      done()
+    })
+  })
+
+  it('should get pods in a namespace', function (done) {
+    var client = new KubeClient({ name: 'pods'})
+    client.get({
+      template: util.makePod(namespace, 'pod-1')
+    }, function (err, pods) {
+      if (err) throw err
+      assert.equal(pods.length, 1)
+      _.map(pods, function (pod) {
+        // simple check of the result structure
+        assert.notEqual(pod.metadata, null)
+      })
+      done()
+    })
+  })
+
+  it('should get services in a namespace', function (done) {
+    var client = new KubeClient({ name: 'services'})
+    client.get({
+      template: util.makeService(namespace, 'service-1', 'pod-1')
+    }, function (err, services) {
+      if (err) throw err
+      assert.equal(services.length, 1)
+      _.map(services, function (service) {
+        // simple check of the result structure
+        assert.notEqual(service.metadata, null)
+      })
+      done()
+    })
+  })
+
+})
+
+describe('KubeClient#delete()', function () {
+
+  it('should delete services in a namespace')
+
+  it('should delete pods in a namespace')
+
+  it('should delete a namespace')
+
+})
+
+describe('KubeClient#watch()', function () {
+
   it('should watch for updates as they are generated', function (done) {
-    this.timeout(20000)
-    var stream = new KubeStream({ name: 'pods' })
-    stream.watch().pipe(es.through(function write(data) {
+    this.timeout(2000)
+    var client = new KubeClient({ name: 'pods' })
+    client.watch().pipe(es.through(function write(data) {
       // Make sure creation/deletion is detected here, then done()
       // console.log('data: ' + data)
     }, function end() {

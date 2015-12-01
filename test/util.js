@@ -10,24 +10,65 @@ var port = settings.kubePort
 var version = settings.kubeVersion
 var baseUrl = '{0}://{1}:{2}/api/{3}'.format(protocol, host, port, version)
 
-var makePod = function (num) {
+var makePod = function (namespace, name) {
   return {
     kind: 'Pod',
-    apiVersion: 'v1',
     metadata: {
-      name: 'pod' + num,
-      namespace: 'default',
+      name: name,
+      namespace: namespace,
       labels: {
-        name: 'pod' + num
+        name: name
       }
     },
     spec: {
       containers: [
         {
           name: 'demo-container',
-          image: 'ubuntu:latest'
+          image: 'ubuntu:latest',
+          imagePullPolicy: 'Always',
         }
-      ]
+      ],
+      dnsPolicy: 'ClusterFirst',
+      restartPolicy: 'Always'
+    }
+  }
+}
+
+var makeNamespace = function (name) {
+  return {
+    kind: 'Namespace',
+    metadata: {
+      name: name,
+      labels: {
+        name: name
+      }
+    }
+  }
+}
+
+var makeService = function (namespace, name, pod) {
+  return {
+    kind: 'Service',
+    metadata: {
+      name: name,
+      namespace: namespace,
+      labels: {
+        name: name
+      } 
+    }, 
+    spec: {
+      selector: {
+        name: pod
+      },
+      ports: [
+        {
+          port: 80,
+          targetPort: 80,
+          protocol: 'TCP'
+        }
+      ],
+      type: 'NodePort',
+      sessionAffinity: 'None'
     }
   }
 }
@@ -35,5 +76,7 @@ var makePod = function (num) {
 
 module.exports = {
   baseUrl: baseUrl,
-  makePod: makePod
+  makePod: makePod,
+  makeNamespace: makeNamespace,
+  makeService: makeService
 }
