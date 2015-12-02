@@ -143,7 +143,6 @@ ResourceClient.prototype.create = function (opts, cb) {
       return next(null)
     }
     self.get({ template: template }, function (err, items) {
-      console.log('calling get callback...')
       if (err) return next(err)
       if (items.length > 0) return next(new Error('resource already exists -- cannot create'))
       return next(null)
@@ -304,7 +303,7 @@ ResourceClient.prototype.watch = function (opts) {
  *
  * TODO: move to a separate module
  *
- * @param {function} opts - options dictionary containing a condition after which to invoke cb
+ * @param {object} opts - options dictionary containing a condition after which to invoke cb
  * @param {function} cb - callback(err, resources)
  */
 ResourceClient.prototype.when = function (opts, cb) {
@@ -322,14 +321,66 @@ ResourceClient.prototype.when = function (opts, cb) {
   }, function (next) {
     self.get(opts, function (err, resources) {
       if (err) return next(err)
-      if (condition(resources)) {
-        return next(null, resources)
+      var match = condition(resources)
+      if (match) {
+        return next(null, match)
       }
       return next(new Error('condition not met'), null)
     })
   }, function (err, results) {
     if (err) return cb(err)
     return cb(null, results)
+  })
+}
+
+/**
+ * Provide a base resource (pod, service...), a state change (delta) to be applied to that resource,
+ * and an action that should produce that state change, and calls cb once the cluster state 
+ * contains a resource with that new state
+ *
+ * Action must be another operation on the ResourceClient (i.e. client.pods.create) using the 
+ * same resource type 
+ *
+ * TODO: move to a separate module
+ *
+ * @param {object} opts - options dictionary containing the desired state, delta and action
+ * @param {function} cb - callback(err, state)
+ */
+ResourceClient.prototype.update = function (opts, cb) {
+  console.log('opts: ' + JSON.stringify(opts))
+  if (!opts.state || !opts.action || !opts.delta) {
+    throw new Error('state, action, and delta must be specified in the options dictionary')
+  }
+  var newState = _.merge({}, opts.state, opts.delta)
+  var actionOpts = opts.actionOpts || {}
+  _.merge(actionOpts, { template: opts.state })
+  var self = this
+  this.get({
+    template: newState
+  }, function (err, resources) {
+    if (err) return cb(err)
+    if (resources.length > 0) {
+      // the cluster is already in the correct state 
+      return cb(null, resources)
+    }
+    // the cluster is not currently in the correct state -- perform the action
+    self.when({
+      condition: function (resources) {
+        var withoutKind = _.omit(newState, 'kind')
+        var match = _.find(resources, withoutKind)
+        if (match) {
+          return match
+        }
+      }
+    }, function (err, resources) {
+        if (err) return cb(err)
+        return cb(null, resources)
+    })
+    console.log('waiting for: ' + JSON.stringify(newState))
+    // perform the action and wait for the above 'when' operation to complete
+    opts.action.bind(self)(actionOpts, function (err, cb) {
+      if (err) return cb(err)
+    })
   })
 }
 

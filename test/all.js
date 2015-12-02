@@ -205,15 +205,61 @@ describe('KubeClient#when()', function () {
       condition: function (namespaces) {
         return (namespaces.length == 0)
       }
-    }, function (err, namespaces) {
+    }, function (err, isEmpty) {
       if (err) throw err
-      assert.equal(namespaces.length, 0)
+      assert(isEmpty)
       done()
     })
     client.namespaces.delete({
       template: ns
     }, function (err, namespace) {
       if (err) throw err
+    })
+  })
+
+})
+
+describe('KubeClient#update()', function () {
+
+  it('should correctly create and wait for a new namespace', function (done) {
+    this.timeout(10000)
+    var ns = util.makeNamespace('test3')
+    var client = new KubeClient()
+    client.namespaces.update({
+      state: ns,
+      delta: { status: { phase: 'Active' }},
+      action: client.namespaces.create
+    }, function (err, namespace) {
+      if (err) throw err
+      done()
+    })
+  })
+
+  it('should correctly create and wait for a new pod', function (done) {
+    this.timeout(10000)
+    var pod = util.makePod('test3', 'pod1')
+    var client = new KubeClient()
+    client.pods.update({
+      state: pod,
+      delta: { status: { phase: 'Running' }},
+      action: client.pods.create
+    }, function (err, pod) {
+      if (err) throw err
+      done()
+    })
+  })
+
+  it('should correctly wait for the deletion of a namespace', function (done) {
+    this.timeout(1000) 
+    var ns = util.makeNamespace('test3')
+    var client = new KubeClient()
+    client.namespaces.update({
+      state: ns,
+      delta: { status: { phase: 'Terminating' }},
+      action: client.namespaces.delete
+    }, function (err, namespace) {
+      if (err) throw err
+      done()
     })
   })
 
