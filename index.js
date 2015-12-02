@@ -15,24 +15,14 @@ var settings = require('./config/main.js')
  * Manages all communication with a Kubernetes resource endpoint (i.e. 'pods')
  * @constructor
  */
-module.exports = KubeClient = function (opts) {
+function ResourceClient (opts) {
   opts = opts || {}
-  var protocol = settings.protocol,
-    kubeHost = settings.kubeHost,
-    kubePort = settings.kubePort,
-    kubeVersion = settings.kubeVersion
-  var defaultUrl = '{0}://{1}:{2}/api/{3}/'.format(protocol, kubeHost, kubePort, kubeVersion)
-
-  this.baseUrl = opts.baseUrl || defaultUrl || 'http://localhost/api/v1'
   this.name = opts.name 
-
-  this.token = util.kubeAuthToken() 
-  if (!this.token) {
-    throw new Error('Kubernetes auth token not found')
-  }
+  this.token = opts.token
+  this.baseUrl = opts.baseUrl
 }
 
-KubeClient.prototype._query = function (url, opts) {
+ResourceClient.prototype._query = function (url, opts) {
   opts = opts || {}
   var query = null
   if (opts.labels) {
@@ -47,7 +37,7 @@ KubeClient.prototype._query = function (url, opts) {
   return url
 }
 
-KubeClient.prototype._requestOpts = function () {
+ResourceClient.prototype._requestOpts = function () {
   return {
     headers: {
       'Authorization': 'Bearer {0}'.format(this.token)
@@ -55,14 +45,14 @@ KubeClient.prototype._requestOpts = function () {
   }
 }
 
-KubeClient.prototype._extract = function (items, view) {
+ResourceClient.prototype._extract = function (items, view) {
   if (!view) {
     return items
   } 
   return _.pluck(items, view)
 }
 
-KubeClient.prototype._processResponse = function (opts, rsp) {
+ResourceClient.prototype._processResponse = function (opts, rsp) {
   opts = opts || {}
   var self = this
   // TODO use pump here?
@@ -105,7 +95,7 @@ KubeClient.prototype._processResponse = function (opts, rsp) {
     }))
 }
 
-KubeClient.prototype.get = function (opts, cb) {
+ResourceClient.prototype.get = function (opts, cb) {
   opts = opts || {}
   if (typeof opts === 'function') {
     cb = opts
@@ -140,7 +130,7 @@ KubeClient.prototype.get = function (opts, cb) {
  * @param {object} opts - object containing the template to create on the cluster and options
  * @param {function} cb - callback(err, resource)
  */
-KubeClient.prototype.create = function (opts, cb) {
+ResourceClient.prototype.create = function (opts, cb) {
   var self = this
   var template = opts.template
   var kind = template.kind
@@ -153,6 +143,7 @@ KubeClient.prototype.create = function (opts, cb) {
       return next(null)
     }
     self.get({ template: template }, function (err, items) {
+      console.log('calling get callback...')
       if (err) return next(err)
       if (items.length > 0) return next(new Error('resource already exists -- cannot create'))
       return next(null)
@@ -176,11 +167,9 @@ KubeClient.prototype.create = function (opts, cb) {
     }, self._requestOpts())
     var processed = self._processResponse({}, request(reqParams))
     processed.on('error', function (err) {
-      console.log('err: ' + err)
       return next(err)
     })
     processed.on('data', function (data) {
-      console.log('data: ' + JSON.stringify(data)) 
       return next(null, data) 
     })
   }
@@ -203,7 +192,7 @@ KubeClient.prototype.create = function (opts, cb) {
  * @param {object} opts - object containing the template to delete and options
  * @param {function} cb - callback(err, resource)
  */
-KubeClient.prototype.delete = function (opts, cb) {
+ResourceClient.prototype.delete = function (opts, cb) {
   var self = this
   var template = opts.template || {}
   var name = opts.name || _.get(template, 'metadata.name')
@@ -244,7 +233,6 @@ KubeClient.prototype.delete = function (opts, cb) {
       fullUrl = urljoin(self.baseUrl, 'namespaces', name)
     }
 
-    console.log('fullUrl: ' + fullUrl)
     var reqParams = _.merge({
       url: fullUrl,
       method: 'DELETE',
@@ -274,7 +262,7 @@ KubeClient.prototype.delete = function (opts, cb) {
  * @param {object} delta - the update to apply to old
  * @param {function} cb - callback(err, resource)
  */
-KubeClient.prototype.update = function (old, delta, cb) {
+ResourceClient.prototype.update = function (old, delta, cb) {
   var self = this
   var newResource = _.assign({}, old, delta)
   var deleteResource = function (next) {
@@ -303,9 +291,62 @@ KubeClient.prototype.update = function (old, delta, cb) {
  *
  * @param {object} opts - optional filters or labels
  */
-KubeClient.prototype.watch = function (opts) {
+ResourceClient.prototype.watch = function (opts) {
   opts = opts || {}
   var self = this
   var fullUrl = this._query(urljoin(this.baseUrl, 'watch', this.name), opts)
-  return this._processResponse(opts, request.get(fullUrl))
+  var processed = this._processResponse(opts, request.get(fullUrl))
+  return processed
+}
+
+/**
+ * Long-poll an endpoint until a condition is met
+ *
+ * TODO: move to a separate module
+ *
+ * @param {function} opts - options dictionary containing a condition after which to invoke cb
+ * @param {function} cb - callback(err, resources)
+ */
+ResourceClient.prototype.when = function (opts, cb) {
+  opts = opts || {}
+  var self = this
+  var condition = opts.condition
+  var times = opts.times || 60
+  var interval = opts.interval || 1000
+  if (!condition) {
+    cb(new Error('must specify a condition inside when'))
+  }
+  async.retry({
+    times: times,
+    interval: interval
+  }, function (next) {
+    self.get(opts, function (err, resources) {
+      if (err) return next(err)
+      if (condition(resources)) {
+        return next(null, resources)
+      }
+      return next(new Error('condition not met'), null)
+    })
+  }, function (err, results) {
+    if (err) return cb(err)
+    return cb(null, results)
+  })
+}
+
+module.exports = function KubeClient(opts) {
+  opts = opts || {}
+  var protocol = settings.protocol,
+    kubeHost = settings.kubeHost,
+    kubePort = settings.kubePort,
+    kubeVersion = settings.kubeVersion
+  var defaultUrl = '{0}://{1}:{2}/api/{3}/'.format(protocol, kubeHost, kubePort, kubeVersion)
+  this.baseUrl = opts.baseUrl || defaultUrl
+  this.token = util.kubeAuthToken() 
+  if (!this.token) {
+    throw new Error('Kubernetes auth token not found')
+  }
+  var self = this
+  _.forEach(['pods', 'services', 'replicationControllers', 'events', 'namespaces', 'nodes'], function (name) {
+    self[name] = new ResourceClient({ name: name, baseUrl: self.baseUrl, token: self.token })
+  })
 }
