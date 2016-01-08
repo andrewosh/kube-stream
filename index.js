@@ -52,6 +52,28 @@ ResourceClient.prototype._extract = function (items, view) {
   return _.pluck(items, view)
 }
 
+ResourceClient.prototype._urlFromOpts = function (opts) {
+  var self = this
+  var template = opts.template
+  var name = opts.name || _.get(template, 'metadata.name')
+  var nsUrl = urljoin(self.baseUrl, 'namespaces')
+  if (!name) {
+    return next(new Error('must specify a name in the resource template'))
+  }
+
+  var fullUrl = null
+  if (self.name !== 'namespaces') {
+    var namespace = _.get(template, 'metadata.namespace') 
+    if (!namespace) {
+      return next(new Error('must specify a namespace (contained in a template)'))
+    }
+    fullUrl = urljoin(self.baseUrl, 'namespaces', namespace, self.name, name)
+  } else  {
+    fullUrl = urljoin(self.baseUrl, 'namespaces', name)
+  }
+  return fullUrl
+}
+
 ResourceClient.prototype._processResponse = function (opts, rsp) {
   opts = opts || {}
   var self = this
@@ -76,6 +98,8 @@ ResourceClient.prototype._processResponse = function (opts, rsp) {
         // kind might not consistently appear in the results
         toMatch = _.omit(toMatch, 'kind')
         var tempNoKind = _.omit(opts.template, 'kind')
+        //console.log('toMatch: ' + JSON.stringify(toMatch, null, ' '))
+        //console.log('tempNoKind: '  + JSON.stringify(tempNoKind, null, ' '))
         if (_.isMatch(toMatch, tempNoKind)) { 
           return cb(null, data)
         }
@@ -95,6 +119,15 @@ ResourceClient.prototype._processResponse = function (opts, rsp) {
     }))
 }
 
+/**
+ * Gets the list of a type of resource on the cluster
+ *
+ * Calls cb with an error if the get request fails, or with the list of resources if it 
+ * succeeds
+ *
+ * @param {object} opts - object containing filters for the get request
+ * @param {function} cb - callback(err, resources)
+ */
 ResourceClient.prototype.get = function (opts, cb) {
   opts = opts || {}
   if (typeof opts === 'function') {
@@ -119,6 +152,88 @@ ResourceClient.prototype.get = function (opts, cb) {
   }
   var concatStream = concat({ encoding: 'object' }, handleItems)
   processed.pipe(concatStream)
+}
+
+/**
+ * Patch an existing resource
+ *
+ * The patch type (opts.type) must be one of the following:
+ *  1) add - adds to the resource (RFC6902)
+ *  2) replace - replaces the resource (RFC6902)
+ *  3) remove - removes the resource (RFC6902)
+ *  4) merge - performs a Strategic Merge Patch (Kubernetes-specific) with the patch/resource
+ *
+ * Calls cb with an error if the patch request fails, or with the patched resource if it 
+ * succeeds
+ *
+ * @param {object} opts - object containing the template to patch
+ * @param {function} cb - callback(err, patched)
+ */
+ResourceClient.prototype.patch = function (opts, cb) {
+  var self = this 
+  var template = opts.template
+  var name = opts.name || _.get(template, 'metadata.name')
+  var patch = opts.patch
+  var type = opts.type
+  if (!name || !patch || !type) {
+    return cb(new Error('name and patch both must exist'))
+  }
+
+  var checkIfExists = function (next) {
+    if (template === {}) {
+      template = {
+        metadata: {
+          name: name
+        }
+      }
+    }
+    self.get({ template: template }, function (err, items) {
+      if (err) return next(err) 
+      if (items.length === 0) return next(new Error('resource does not exist -- cannot patch'))
+      return next(null)
+    })
+  }
+
+  var patchResource = function (next) {
+    var fullUrl = self._urlFromOpts(opts)
+    var reqParams = _.merge({
+      url: fullUrl,
+      method: 'PATCH',
+    }, self._requestOpts())
+    var body = null 
+    if (type === 'merge') {
+      body = JSON.stringify(patch)
+      reqParams.headers['Content-Type'] = 'application/strategic-merge-patch+json'
+    } else {
+      var paths = util.enumeratePaths(patch)
+      if (paths.length !== 1) {
+        return next(new Error('patch object can only contain a single valid path'))
+      }
+      var path = paths[0]
+      body = JSON.stringify({
+        op: type,
+        path: path,
+        value: _.get(patch, path.split('/').join('.'))
+      })
+    }
+    reqParams.body = body
+    console.log('reqParams: ' + JSON.stringify(reqParams))
+    var processed = self._processResponse({}, request(reqParams))
+    processed.on('error', function (err) {
+      return next(err)
+    })
+    processed.on('data', function (data) {
+      return next(null, data) 
+    })
+  }
+
+  async.series([
+    checkIfExists,
+    patchResource
+  ], function (err, patched) {
+    if (err) return cb(err)
+    return cb(null, patched)
+  })
 }
 
 /**
@@ -218,20 +333,7 @@ ResourceClient.prototype.delete = function (opts, cb) {
   }
 
   var deleteResource = function (next) {
-    var nsUrl = urljoin(self.baseUrl, 'namespaces')
-    if (!name) {
-      return next(new Error('must specify a name in the resource template'))
-    }
-
-    var namespace = null
-    var fullUrl = null
-    if (self.name !== 'namespaces') {
-      namespace = opts.namespace || _.get(template, 'metadata.namespace') 
-      fullUrl = urljoin(self.baseUrl, 'namespaces', namespace, self.name, name)
-    } else  {
-      fullUrl = urljoin(self.baseUrl, 'namespaces', name)
-    }
-
+    var fullUrl = self._urlFromOpts(opts)
     var reqParams = _.merge({
       url: fullUrl,
       method: 'DELETE',
@@ -323,9 +425,11 @@ ResourceClient.prototype.when = function (opts, cb) {
       if (err) return next(err)
       var match = condition(resources)
       if (match) {
-        return next(null, match)
+        if (!_.isArray(match) || match.length !== 0) { 
+          return next(null, match)
+        }
       }
-      return next(new Error('condition not met'), null)
+      return next('condition not met')
     })
   }, function (err, results) {
     if (err) return cb(err)
@@ -342,43 +446,72 @@ ResourceClient.prototype.when = function (opts, cb) {
  * same resource type 
  *
  * TODO: move to a separate module
+ * 
+ * options:
+ *  - state {object}: the resource to update (i.e. a Pod)
+ *  - action {function}: the action to take on the resource (i.e. client.pods.create)
+ *  - delta {object}: the desired state change after the action was taken (i.e. the Pod is running)
+ *  - condition {function): a predicate to match against resources 
+ *
+ * Either a delta or a condition must be specified, but not both
  *
  * @param {object} opts - options dictionary containing the desired state, delta and action
  * @param {function} cb - callback(err, state)
  */
-ResourceClient.prototype.update = function (opts, cb) {
-  console.log('opts: ' + JSON.stringify(opts))
-  if (!opts.state || !opts.action || !opts.delta) {
-    throw new Error('state, action, and delta must be specified in the options dictionary')
+ResourceClient.prototype.changeState = function (opts, cb) {
+  if (!opts.state || !opts.action) {
+    throw new Error('state and action must be specified')
   }
-  var newState = _.merge({}, opts.state, opts.delta)
+  if (!opts.condition && !opts.delta) {
+    throw new Error('did not specify either a condition or a delta')
+  }
+  if (opts.condition && opts.delta) {
+    throw new Error('cannot specify both a condition and a delta')
+  }
   var actionOpts = opts.actionOpts || {}
   _.merge(actionOpts, { template: opts.state })
+
+  var newState = null
+  if (opts.delta) { 
+    newState = _.merge({}, opts.state, opts.delta)
+  }
+
+  var condition = function (resources) {
+    var cond = null
+    if (newState) {
+      cond = _.omit(newState, 'kind')
+      return _.find(resources, cond)
+    } else {
+      return opts.condition(resources)
+    }
+  }
+
   var self = this
-  this.get({
-    template: newState
-  }, function (err, resources) {
+  var getOptions = opts.state ? { template: opts.state } : {}
+  this.get(getOptions, function (err, resources) {
     if (err) return cb(err)
-    if (resources.length > 0) {
-      // the cluster is already in the correct state 
-      return cb(null, resources)
+    var match = condition(resources)
+    if (match) {
+      if (!_.isArray(match) || match.length !== 0) { 
+      // the cluster is already in the correct state
+        return cb(null, match)
+      }
     }
     // the cluster is not currently in the correct state -- perform the action
-    self.when({
-      condition: function (resources) {
-        var withoutKind = _.omit(newState, 'kind')
-        var match = _.find(resources, withoutKind)
-        if (match) {
-          return match
-        }
-      }
-    }, function (err, resources) {
+    var whenOpts = {}
+    if (opts.interval) {
+      whenOpts.interval = opts.interval
+    } 
+    if (opts.times) {
+      whenOpts.times = opts.times
+    }
+    self.when(_.merge(whenOpts, getOptions, { condition: condition }), 
+      function (err, resource) {
         if (err) return cb(err)
-        return cb(null, resources)
+        return cb(null, resource)
     })
-    console.log('waiting for: ' + JSON.stringify(newState))
     // perform the action and wait for the above 'when' operation to complete
-    opts.action.bind(self)(actionOpts, function (err, cb) {
+    opts.action.bind(self)(actionOpts, function (err) {
       if (err) return cb(err)
     })
   })
