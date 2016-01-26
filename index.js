@@ -202,7 +202,7 @@ ResourceClient.prototype.patch = function (opts, cb) {
     }, self._requestOpts())
     var body = null 
     if (type === 'merge') {
-      body = JSON.stringify(patch)
+      body = patch
       reqParams.headers['Content-Type'] = 'application/strategic-merge-patch+json'
     } else {
       var paths = util.enumeratePaths(patch)
@@ -210,13 +210,16 @@ ResourceClient.prototype.patch = function (opts, cb) {
         return next(new Error('patch object can only contain a single valid path'))
       }
       var path = paths[0]
-      body = JSON.stringify({
+      body = {
         op: type,
         path: path,
         value: _.get(patch, path.split('/').join('.'))
-      })
+      }
+      console.log('body is: ' + body)
+      reqParams.headers['Content-Type'] = 'application/json-patch+json'
+      reqParams.headers['If-Match'] = 'abc123'
     }
-    reqParams.body = body
+    reqParams.json = body
     console.log('reqParams: ' + JSON.stringify(reqParams))
     var processed = self._processResponse({}, request(reqParams))
     processed.on('error', function (err) {
