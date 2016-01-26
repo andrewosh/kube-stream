@@ -96,6 +96,9 @@ ResourceClient.prototype._processResponse = function (opts, rsp) {
 }
 
 ResourceClient.prototype.get = function (opts, cb) {
+  if (!this.token) {
+    return cb(new Error('Kubernetes auth token not found'))
+  }
   opts = opts || {}
   if (typeof opts === 'function') {
     cb = opts
@@ -131,6 +134,9 @@ ResourceClient.prototype.get = function (opts, cb) {
  * @param {function} cb - callback(err, resource)
  */
 ResourceClient.prototype.create = function (opts, cb) {
+  if (!this.token) {
+    return cb(new Error('Kubernetes auth token not found'))
+  }
   var self = this
   var template = opts.template
   var kind = template.kind
@@ -192,6 +198,9 @@ ResourceClient.prototype.create = function (opts, cb) {
  * @param {function} cb - callback(err, resource)
  */
 ResourceClient.prototype.delete = function (opts, cb) {
+  if (!this.token) {
+    return cb(new Error('Kubernetes auth token not found'))
+  }
   var self = this
   var template = opts.template || {}
   var name = opts.name || _.get(template, 'metadata.name')
@@ -262,6 +271,9 @@ ResourceClient.prototype.delete = function (opts, cb) {
  * @param {function} cb - callback(err, resource)
  */
 ResourceClient.prototype.update = function (old, delta, cb) {
+  if (!this.token) {
+    return cb(new Error('Kubernetes auth token not found'))
+  }
   var self = this
   var newResource = _.assign({}, old, delta)
   var deleteResource = function (next) {
@@ -291,6 +303,9 @@ ResourceClient.prototype.update = function (old, delta, cb) {
  * @param {object} opts - optional filters or labels
  */
 ResourceClient.prototype.watch = function (opts) {
+  if (!this.token) {
+    return cb(new Error('Kubernetes auth token not found'))
+  }
   opts = opts || {}
   var self = this
   var fullUrl = this._query(urljoin(this.baseUrl, 'watch', this.name), opts)
@@ -307,6 +322,9 @@ ResourceClient.prototype.watch = function (opts) {
  * @param {function} cb - callback(err, resources)
  */
 ResourceClient.prototype.when = function (opts, cb) {
+  if (!this.token) {
+    return cb(new Error('Kubernetes auth token not found'))
+  }
   opts = opts || {}
   var self = this
   var condition = opts.condition
@@ -347,7 +365,9 @@ ResourceClient.prototype.when = function (opts, cb) {
  * @param {function} cb - callback(err, state)
  */
 ResourceClient.prototype.update = function (opts, cb) {
-  console.log('opts: ' + JSON.stringify(opts))
+  if (!this.token) {
+    return cb(new Error('Kubernetes auth token not found'))
+  }
   if (!opts.state || !opts.action || !opts.delta) {
     throw new Error('state, action, and delta must be specified in the options dictionary')
   }
@@ -394,7 +414,7 @@ module.exports = function KubeClient(opts) {
   this.baseUrl = opts.baseUrl || defaultUrl
   this.token = util.kubeAuthToken() 
   if (!this.token) {
-    throw new Error('Kubernetes auth token not found')
+    console.error('Kubernetes auth token not found')
   }
   var self = this
   _.forEach(['pods', 'services', 'replicationControllers', 'events', 'namespaces', 'nodes'], function (name) {
