@@ -66,7 +66,7 @@ ResourceClient.prototype._urlFromOpts = function (opts) {
 
   var fullUrl = null
   if (self.name !== 'namespaces') {
-    var namespace = _.get(template, 'metadata.namespace') 
+    var namespace = _.get(template, 'metadata.namespace')
     if (!namespace) {
       return next(new Error('must specify a namespace (contained in a template)'))
     }
@@ -87,7 +87,7 @@ ResourceClient.prototype._processResponse = function (opts, rsp) {
     .pipe(es.through(function write(data) {
       var thr = this
       var items = _.get(data, 'items')
-      if (items) { 
+      if (items) {
         _.forEach(_.get(data, 'items'), function (item) {
           thr.emit('data', item)
         })
@@ -103,7 +103,7 @@ ResourceClient.prototype._processResponse = function (opts, rsp) {
         var tempNoKind = _.omit(opts.template, 'kind')
         //console.log('toMatch: ' + JSON.stringify(toMatch, null, ' '))
         //console.log('tempNoKind: '  + JSON.stringify(tempNoKind, null, ' '))
-        if (_.isMatch(toMatch, tempNoKind)) { 
+        if (_.isMatch(toMatch, tempNoKind)) {
           return cb(null, data)
         }
         return cb()
@@ -115,7 +115,7 @@ ResourceClient.prototype._processResponse = function (opts, rsp) {
     }))
     .pipe(es.through(function write(data) {
       if (data && data['kind'] === 'Status' && data['status'] === 'Failure') {
-        this.emit('error', data)
+        this.emit('error', new Error(JSON.stringify(data)))
       } else {
         this.emit('data', data)
       }
@@ -349,7 +349,7 @@ ResourceClient.prototype.delete = function (opts, cb) {
       return next(err)
     })
     processed.on('data', function (data) {
-      return next(null, data) 
+      return next(null, data)
     })
   }
 
@@ -357,7 +357,7 @@ ResourceClient.prototype.delete = function (opts, cb) {
     checkIfNotExists,
     deleteResource
   ], function (err, resource) {
-    if (err) return cb(err) 
+    if (err) return cb(err)
     return cb(null, resource)
   })
 }
@@ -385,8 +385,8 @@ ResourceClient.prototype.update = function (old, delta, cb) {
     })
   }
   async.series([
-    deleteOld,
-    createNew
+    deleteResource,
+    createResource
   ], function (err, res) {
     if (err) return cb(err)
     return cb(null, res)
@@ -478,7 +478,7 @@ ResourceClient.prototype.changeState = function (opts, cb) {
   _.merge(actionOpts, { template: opts.state })
 
   var newState = null
-  if (opts.delta) { 
+  if (opts.delta) {
     newState = _.merge({}, opts.state, opts.delta)
   }
 
@@ -498,7 +498,7 @@ ResourceClient.prototype.changeState = function (opts, cb) {
     if (err) return cb(err)
     var match = condition(resources)
     if (match) {
-      if (!_.isArray(match) || match.length !== 0) { 
+      if (!_.isArray(match) || match.length !== 0) {
       // the cluster is already in the correct state
         return cb(null, match)
       }
@@ -507,14 +507,13 @@ ResourceClient.prototype.changeState = function (opts, cb) {
     var whenOpts = {}
     if (opts.interval) {
       whenOpts.interval = opts.interval
-    } 
+    }
     if (opts.times) {
       whenOpts.times = opts.times
     }
-    self.when(_.merge(whenOpts, getOptions, { condition: condition }), 
-      function (err, resource) {
-        if (err) return cb(err)
-        return cb(null, resource)
+    self.when(_.merge(whenOpts, getOptions, { condition: condition }), function (err, resource) {
+      if (err) return cb(err)
+      return cb(null, resource)
     })
     // perform the action and wait for the above 'when' operation to complete
     opts.action.bind(self)(actionOpts, function (err) {
