@@ -84,7 +84,7 @@ ResourceClient.prototype._processResponse = function (opts, rsp) {
   return rsp
     .pipe(es.split())
     .pipe(JSONStream.parse())
-    .pipe(es.through(function write(data) {
+    .pipe(es.through(function write (data) {
       var thr = this
       var items = _.get(data, 'items')
       if (items) {
@@ -113,7 +113,7 @@ ResourceClient.prototype._processResponse = function (opts, rsp) {
     .pipe(es.map(function (data, cb) {
       cb(null, self._extract(data, opts.view))
     }))
-    .pipe(es.through(function write(data) {
+    .pipe(es.through(function write (data) {
       if (data && data['kind'] === 'Status' && data['status'] === 'Failure') {
         this.emit('error', new Error(JSON.stringify(data)))
       } else {
@@ -150,7 +150,7 @@ ResourceClient.prototype.get = function (opts, cb) {
   processed.on('error', function (err) {
     return cb(err)
   })
-  var handleItems = function (items) { 
+  var handleItems = function (items) {
     return cb(null, items)
   }
   var concatStream = concat({ encoding: 'object' }, handleItems)
@@ -166,14 +166,14 @@ ResourceClient.prototype.get = function (opts, cb) {
  *  3) remove - removes the resource (RFC6902)
  *  4) merge - performs a Strategic Merge Patch (Kubernetes-specific) with the patch/resource
  *
- * Calls cb with an error if the patch request fails, or with the patched resource if it 
+ * Calls cb with an error if the patch request fails, or with the patched resource if it
  * succeeds
  *
  * @param {object} opts - object containing the template to patch
  * @param {function} cb - callback(err, patched)
  */
 ResourceClient.prototype.patch = function (opts, cb) {
-  var self = this 
+  var self = this
   var template = opts.template
   var name = opts.name || _.get(template, 'metadata.name')
   var patch = opts.patch
@@ -191,7 +191,7 @@ ResourceClient.prototype.patch = function (opts, cb) {
       }
     }
     self.get({ template: template }, function (err, items) {
-      if (err) return next(err) 
+      if (err) return next(err)
       if (items.length === 0) return next(new Error('resource does not exist -- cannot patch'))
       return next(null)
     })
@@ -201,9 +201,10 @@ ResourceClient.prototype.patch = function (opts, cb) {
     var fullUrl = self._urlFromOpts(opts)
     var reqParams = _.merge({
       url: fullUrl,
-      method: 'PATCH',
+      method: 'PATCH'
     }, self._requestOpts())
-    var body = null 
+    var body = null
+    reqParams.headers = reqParams.headers || {}
     if (type === 'merge') {
       body = patch
       reqParams.headers['Content-Type'] = 'application/strategic-merge-patch+json'
@@ -213,23 +214,22 @@ ResourceClient.prototype.patch = function (opts, cb) {
         return next(new Error('patch object can only contain a single valid path'))
       }
       var path = paths[0]
-      body = {
+      body = [{
         op: type,
         path: path,
         value: _.get(patch, path.split('/').join('.'))
-      }
-      console.log('body is: ' + body)
+      }]
       reqParams.headers['Content-Type'] = 'application/json-patch+json'
       reqParams.headers['If-Match'] = 'abc123'
     }
     reqParams.json = body
-    console.log('reqParams: ' + JSON.stringify(reqParams))
     var processed = self._processResponse({}, request(reqParams))
     processed.on('error', function (err) {
       return next(err)
     })
     processed.on('data', function (data) {
-      return next(null, data) 
+      console.log('data: ' + JSON.stringify(data))
+      return next(null, data)
     })
   }
 
@@ -238,7 +238,7 @@ ResourceClient.prototype.patch = function (opts, cb) {
     patchResource
   ], function (err, patched) {
     if (err) return cb(err)
-    return cb(null, patched)
+    return cb(null, patched[1])
   })
 }
 
@@ -445,11 +445,11 @@ ResourceClient.prototype.when = function (opts, cb) {
 
 /**
  * Provide a base resource (pod, service...), a state change (delta) to be applied to that resource,
- * and an action that should produce that state change, and calls cb once the cluster state 
+ * and an action that should produce that state change, and calls cb once the cluster state
  * contains a resource with that new state
  *
- * Action must be another operation on the ResourceClient (i.e. client.pods.create) using the 
- * same resource type 
+ * Action must be another operation on the ResourceClient (i.e. client.pods.create) using the
+ * same resource type
  *
  * TODO: move to a separate module
  * 
@@ -457,7 +457,7 @@ ResourceClient.prototype.when = function (opts, cb) {
  *  - state {object}: the resource to update (i.e. a Pod)
  *  - action {function}: the action to take on the resource (i.e. client.pods.create)
  *  - delta {object}: the desired state change after the action was taken (i.e. the Pod is running)
- *  - condition {function): a predicate to match against resources 
+ *  - condition {function): a predicate to match against resources
  *
  * Either a delta or a condition must be specified, but not both
  *

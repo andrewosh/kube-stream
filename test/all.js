@@ -176,21 +176,20 @@ describe('KubeClient', function () {
       var pod = util.makePod('patch', 'pod1')
       client.pods.changeState({
         state: pod,
-        delta: { status: { phase: 'Running' }},
+        delta: { status: { phase: 'Running' } },
         action: client.pods.create
       }, function (err, pod) {
         if (err) throw err
         client.pods.patch({
           template: pod,
           type: 'add',
-          patch: { metadata: { labels: { hello: 'world' }}}
-        }, function (err, pod) {
+          patch: { metadata: { labels: { hello: 'world' } } }
+        }, function (err, patched) {
           if (err) throw err
-          }, function (err, patched) {
-            if (err) throw err
-            var labels = _.get(patched, 'metadata.labels') 
-            assert(labels.hello === 'world')
-            done()
+          console.log('patched: ' + JSON.stringify(patched))
+          var labels = _.get(patched, 'metadata.labels')
+          assert(labels.hello === 'world')
+          done()
         })
       })
     })
