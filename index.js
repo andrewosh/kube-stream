@@ -68,7 +68,7 @@ ResourceClient.prototype._urlFromOpts = function (opts) {
   if (self.name !== 'namespaces') {
     var namespace = _.get(template, 'metadata.namespace')
     if (!namespace) {
-      return next(new Error('must specify a namespace (contained in a template)'))
+      console.warning('namespace not contained in template')
     }
     fullUrl = urljoin(self.baseUrl, 'namespaces', namespace, self.name, name)
   } else  {
@@ -228,7 +228,6 @@ ResourceClient.prototype.patch = function (opts, cb) {
       return next(err)
     })
     processed.on('data', function (data) {
-      console.log('data: ' + JSON.stringify(data))
       return next(null, data)
     })
   }
@@ -276,7 +275,7 @@ ResourceClient.prototype.create = function (opts, cb) {
     if (kind !== 'Namespace') {
       var namespace = _.get(template, 'metadata.namespace')
       if (!namespace) {
-        return next(new Error('must specify a namespace in the resource template'))
+        console.warn('namespace not included in resource template')
       }
       fullUrl = urljoin(self.baseUrl, 'namespaces', namespace, self.name)
     }
@@ -535,7 +534,16 @@ module.exports = function KubeClient(opts) {
     console.warn('Kubernetes auth token not found')
   }
   var self = this
-  _.forEach(['pods', 'services', 'replicationControllers', 'events', 'namespaces', 'nodes'], function (name) {
+  var resources = [
+    'pods',
+    'services',
+    'replicationControllers',
+    'events',
+    'namespaces',
+    'nodes',
+    'secrets'
+  ]
+  _.forEach(resources, function (name) {
     self[name] = new ResourceClient({ name: name, baseUrl: self.baseUrl, token: self.token })
   })
 }
