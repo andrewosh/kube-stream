@@ -1,6 +1,6 @@
 {
   "name": "kube-stream",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A streaming client for Kubernetes",
   "main": "index.js",
   "scripts": {
@@ -24,6 +24,7 @@
     "concat-stream": "^1.5.1",
     "event-stream": "^3.3.2",
     "js-yaml": "^3.5.2",
+    "kube-test-utils": "^1.0.0",
     "lodash": "~4.3.0",
     "request": "~2.67.0",
     "string-format": "^0.5.0",
