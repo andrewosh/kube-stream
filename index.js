@@ -523,13 +523,13 @@ ResourceClient.prototype.changeState = function (opts, cb) {
 
 module.exports = function KubeClient(opts) {
   opts = opts || {}
-  var protocol = settings.protocol,
-    kubeHost = settings.kubeHost,
-    kubePort = settings.kubePort,
-    kubeVersion = settings.kubeVersion
+  var protocol = opts.protocol || settings.protocol,
+    kubeHost = opts.host || settings.host,
+    kubePort = opts.port || settings.port,
+    kubeVersion = opts.version || settings.version
   var defaultUrl = '{0}://{1}:{2}/api/{3}/'.format(protocol, kubeHost, kubePort, kubeVersion)
   this.baseUrl = opts.baseUrl || defaultUrl
-  this.token = util.kubeAuthToken() 
+  this.token = util.kubeAuthToken()
   if (!this.token) {
     console.warn('Kubernetes auth token not found')
   }

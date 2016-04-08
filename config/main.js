@@ -1,8 +1,8 @@
 module.exports = {
   protocol: 'http',
-  kubeHost: 'localhost',
-  kubePort: '8085',
-  kubeVersion: 'v1'
+  host: 'localhost',
+  port: '8085',
+  version: 'v1'
 }
 
 
