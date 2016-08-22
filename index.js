@@ -17,7 +17,7 @@ var settings = require('./config/main.js')
  */
 function ResourceClient (opts) {
   opts = opts || {}
-  this.name = opts.name 
+  this.name = opts.name
   this.token = opts.token
   this.baseUrl = opts.baseUrl
 }
@@ -510,13 +510,15 @@ ResourceClient.prototype.changeState = function (opts, cb) {
     if (opts.times) {
       whenOpts.times = opts.times
     }
+    var actionError = null
     self.when(_.merge(whenOpts, getOptions, { condition: condition }), function (err, resource) {
       if (err) return cb(err)
+      if (actionError) return cb(actionError)
       return cb(null, resource)
     })
     // perform the action and wait for the above 'when' operation to complete
     opts.action.bind(self)(actionOpts, function (err) {
-      if (err) return cb(err)
+      actionError = err
     })
   })
 }
