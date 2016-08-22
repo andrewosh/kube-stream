@@ -1,6 +1,6 @@
 {
   "name": "kube-stream",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A streaming client for Kubernetes",
   "main": "index.js",
   "scripts": {
